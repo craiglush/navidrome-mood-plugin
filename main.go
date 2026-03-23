@@ -1,13 +1,6 @@
 // Package main implements a Navidrome plugin that provides mood-based playlists
 // and similar song recommendations using audio analysis from an external service.
 //
-// The plugin:
-// 1. Periodically scans the library for unanalyzed tracks
-// 2. Sends them to an external analyzer service (essentia-tensorflow based)
-// 3. Stores mood scores (happy, sad, relaxed, aggressive, party, danceability) in kvstore
-// 4. Creates and refreshes mood-based playlists via the Subsonic API
-// 5. Provides mood-similar songs for Instant Mix
-//
 //go:build wasip1
 
 package main
@@ -28,7 +21,6 @@ import (
 
 // ── Types ────────────────────────────────────────────────────────
 
-// MoodScores holds analysis results for a single track.
 type MoodScores struct {
 	MoodHappy      float64 `json:"mood_happy"`
 	MoodSad        float64 `json:"mood_sad"`
@@ -40,7 +32,6 @@ type MoodScores struct {
 	Energy         float64 `json:"energy"`
 }
 
-// AnalysisResponse is the JSON response from the analyzer service.
 type AnalysisResponse struct {
 	FilePath       string  `json:"file_path"`
 	Title          string  `json:"title"`
@@ -56,36 +47,13 @@ type AnalysisResponse struct {
 	Energy         float64 `json:"energy"`
 }
 
-// MoodDefinition defines a mood playlist configuration.
 type MoodDefinition struct {
-	Key            string
-	Label          string
-	ScoreField     string
-	ThresholdKey   string
-	DefaultThresh  float64
+	Key           string
+	Label         string
+	ScoreField    string
+	ThresholdKey  string
+	DefaultThresh float64
 }
-
-// SubsonicSearchResult represents a song from Subsonic search3 response.
-type SubsonicSearchResult struct {
-	SearchResult3 struct {
-		Song []struct {
-			ID     string `json:"id"`
-			Title  string `json:"title"`
-			Artist string `json:"artist"`
-			Album  string `json:"album"`
-		} `json:"song"`
-	} `json:"searchResult3"`
-}
-
-// SubsonicResponse wraps a generic Subsonic API response.
-type SubsonicResponse struct {
-	SubsonicResponse struct {
-		Status string          `json:"status"`
-		Error  json.RawMessage `json:"error,omitempty"`
-	} `json:"subsonic-response"`
-}
-
-// ── Constants ────────────────────────────────────────────────────
 
 var moods = []MoodDefinition{
 	{Key: "happy", Label: "Happy Mix", ScoreField: "mood_happy", ThresholdKey: "happy_threshold", DefaultThresh: 0.55},
@@ -96,7 +64,7 @@ var moods = []MoodDefinition{
 	{Key: "aggressive", Label: "Aggressive Mix", ScoreField: "mood_aggressive", ThresholdKey: "aggressive_threshold", DefaultThresh: 0.45},
 }
 
-// ── Plugin Implementation ────────────────────────────────────────
+// ── Plugin Registration ──────────────────────────────────────────
 
 type moodPlugin struct{}
 
@@ -110,8 +78,7 @@ func main() {
 func onInit() int32 {
 	pdk.Log(pdk.LogInfo, "Mood Playlists plugin initializing...")
 
-	autoAnalyze := configBool("auto_analyze", true)
-	if autoAnalyze {
+	if configBool("auto_analyze", true) {
 		schedule := configString("analyze_schedule", "0 2 * * *")
 		_, err := host.SchedulerScheduleRecurring(schedule, "analyze", "mood-analyze")
 		if err != nil {
@@ -153,18 +120,16 @@ func onSchedule() int32 {
 
 // ── Similar Songs (Instant Mix) ──────────────────────────────────
 
-// GetSimilarSongsByTrack returns tracks with similar mood profiles.
 func (p *moodPlugin) GetSimilarSongsByTrack(req metadata.SimilarSongsByTrackRequest) (*metadata.SimilarSongsResponse, error) {
 	count := int(req.Count)
 	if count <= 0 {
 		count = configInt("similar_songs_count", 20)
 	}
 
-	// Get the source track's mood scores from kvstore
 	sourceKey := "mood:" + req.ID
-	sourceData, err := host.KVStoreGet(sourceKey)
-	if err != nil || len(sourceData) == 0 {
-		pdk.Log(pdk.LogDebug, "No mood data for track "+req.ID+", cannot find similar songs")
+	sourceData, ok, err := host.KVStoreGet(sourceKey)
+	if err != nil || !ok || len(sourceData) == 0 {
+		pdk.Log(pdk.LogDebug, "No mood data for track "+req.ID)
 		return &metadata.SimilarSongsResponse{}, nil
 	}
 
@@ -173,23 +138,19 @@ func (p *moodPlugin) GetSimilarSongsByTrack(req metadata.SimilarSongsByTrackRequ
 		return nil, fmt.Errorf("failed to parse mood data: %w", err)
 	}
 
-	// Get all analyzed track IDs from the index
-	indexData, err := host.KVStoreGet("mood:index")
-	if err != nil || len(indexData) == 0 {
+	indexData, ok, err := host.KVStoreGet("mood:index")
+	if err != nil || !ok || len(indexData) == 0 {
 		return &metadata.SimilarSongsResponse{}, nil
 	}
 
-	var trackIndex map[string]string // id -> "title|artist"
+	var trackIndex map[string]string
 	if err := json.Unmarshal(indexData, &trackIndex); err != nil {
 		return &metadata.SimilarSongsResponse{}, nil
 	}
 
-	// Score similarity for each tracked song
 	type scoredTrack struct {
-		id       string
-		name     string
-		artist   string
-		distance float64
+		id, name, artist string
+		distance         float64
 	}
 
 	var candidates []scoredTrack
@@ -197,17 +158,14 @@ func (p *moodPlugin) GetSimilarSongsByTrack(req metadata.SimilarSongsByTrackRequ
 		if id == req.ID {
 			continue
 		}
-
-		data, err := host.KVStoreGet("mood:" + id)
-		if err != nil || len(data) == 0 {
+		data, ok, err := host.KVStoreGet("mood:" + id)
+		if err != nil || !ok || len(data) == 0 {
 			continue
 		}
-
 		var scores MoodScores
 		if err := json.Unmarshal(data, &scores); err != nil {
 			continue
 		}
-
 		dist := moodDistance(sourceScores, scores)
 		parts := strings.SplitN(info, "|", 2)
 		name := parts[0]
@@ -215,16 +173,13 @@ func (p *moodPlugin) GetSimilarSongsByTrack(req metadata.SimilarSongsByTrackRequ
 		if len(parts) > 1 {
 			artist = parts[1]
 		}
-
 		candidates = append(candidates, scoredTrack{id: id, name: name, artist: artist, distance: dist})
 	}
 
-	// Sort by distance (most similar first)
 	sort.Slice(candidates, func(i, j int) bool {
 		return candidates[i].distance < candidates[j].distance
 	})
 
-	// Return top N
 	limit := count
 	if limit > len(candidates) {
 		limit = len(candidates)
@@ -248,15 +203,13 @@ func runAnalysis() int32 {
 	analyzerURL := configString("analyzer_url", "http://music-manager:5000")
 	pdk.Log(pdk.LogInfo, "Running mood analysis via "+analyzerURL)
 
-	// Get all songs from the library via Subsonic API
-	// Use getRandomSongs to sample the library in batches
 	analyzed := 0
 	offset := 0
 	batchSize := 100
 
 	for {
 		uri := fmt.Sprintf("search3?query=&songCount=%d&songOffset=%d&albumCount=0&artistCount=0", batchSize, offset)
-		respData, err := host.SubsonicAPICall(uri)
+		respStr, err := host.SubsonicAPICall(uri)
 		if err != nil {
 			pdk.Log(pdk.LogError, "Subsonic API search failed: "+err.Error())
 			break
@@ -276,7 +229,7 @@ func runAnalysis() int32 {
 			} `json:"subsonic-response"`
 		}
 
-		if err := json.Unmarshal(respData, &result); err != nil {
+		if err := json.Unmarshal([]byte(respStr), &result); err != nil {
 			pdk.Log(pdk.LogError, "Failed to parse search results: "+err.Error())
 			break
 		}
@@ -287,28 +240,24 @@ func runAnalysis() int32 {
 		}
 
 		for _, song := range songs {
-			// Check if already analyzed
 			key := "mood:" + song.ID
-			existing, _ := host.KVStoreGet(key)
-			if len(existing) > 0 {
+			existing, ok, _ := host.KVStoreGet(key)
+			if ok && len(existing) > 0 {
 				continue
 			}
 
-			// Call analyzer service
 			scores, err := callAnalyzer(analyzerURL, song.Path)
 			if err != nil {
 				pdk.Log(pdk.LogDebug, "Analysis failed for "+song.Title+": "+err.Error())
 				continue
 			}
 
-			// Store in kvstore
 			data, _ := json.Marshal(scores)
 			if err := host.KVStoreSet(key, data); err != nil {
 				pdk.Log(pdk.LogWarn, "Failed to store mood data for "+song.Title)
 				continue
 			}
 
-			// Update index
 			updateIndex(song.ID, song.Title, song.Artist)
 			analyzed++
 		}
@@ -327,11 +276,11 @@ func callAnalyzer(baseURL, filePath string) (*MoodScores, error) {
 	reqBody, _ := json.Marshal(map[string]string{"file_path": filePath})
 
 	resp, err := host.HTTPSend(host.HTTPRequest{
-		URL:     baseURL + "/api/analysis/file",
-		Method:  "POST",
-		Body:    string(reqBody),
-		Headers: map[string]string{"Content-Type": "application/json"},
-		Timeout: 120,
+		URL:       baseURL + "/api/analysis/file",
+		Method:    "POST",
+		Body:      reqBody,
+		Headers:   map[string]string{"Content-Type": "application/json"},
+		TimeoutMs: 120000,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("HTTP request failed: %w", err)
@@ -342,7 +291,7 @@ func callAnalyzer(baseURL, filePath string) (*MoodScores, error) {
 	}
 
 	var analysis AnalysisResponse
-	if err := json.Unmarshal([]byte(resp.Body), &analysis); err != nil {
+	if err := json.Unmarshal(resp.Body, &analysis); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
@@ -364,9 +313,8 @@ func refreshPlaylists() int32 {
 	pdk.Log(pdk.LogInfo, "Refreshing mood playlists...")
 	trackCount := configInt("playlist_track_count", 30)
 
-	// Load the full index
-	indexData, err := host.KVStoreGet("mood:index")
-	if err != nil || len(indexData) == 0 {
+	indexData, ok, err := host.KVStoreGet("mood:index")
+	if err != nil || !ok || len(indexData) == 0 {
 		pdk.Log(pdk.LogWarn, "No analyzed tracks found — run analysis first")
 		return 0
 	}
@@ -377,18 +325,15 @@ func refreshPlaylists() int32 {
 		return 1
 	}
 
-	// Load all mood scores
 	type trackWithScores struct {
-		id     string
-		name   string
-		artist string
-		scores MoodScores
+		id, name, artist string
+		scores           MoodScores
 	}
 
 	var allTracks []trackWithScores
 	for id, info := range trackIndex {
-		data, err := host.KVStoreGet("mood:" + id)
-		if err != nil || len(data) == 0 {
+		data, ok, err := host.KVStoreGet("mood:" + id)
+		if err != nil || !ok || len(data) == 0 {
 			continue
 		}
 		var scores MoodScores
@@ -409,20 +354,16 @@ func refreshPlaylists() int32 {
 		return 0
 	}
 
-	// Create a playlist for each mood
 	for _, mood := range moods {
 		threshold := configFloat(mood.ThresholdKey, mood.DefaultThresh)
 
-		// Filter and sort by the mood's score field
 		var matching []trackWithScores
 		for _, t := range allTracks {
-			score := getMoodScore(t.scores, mood.ScoreField)
-			if score >= threshold {
+			if getMoodScore(t.scores, mood.ScoreField) >= threshold {
 				matching = append(matching, t)
 			}
 		}
 
-		// Sort by score descending
 		sort.Slice(matching, func(i, j int) bool {
 			return getMoodScore(matching[i].scores, mood.ScoreField) > getMoodScore(matching[j].scores, mood.ScoreField)
 		})
@@ -431,18 +372,15 @@ func refreshPlaylists() int32 {
 		if limit > len(matching) {
 			limit = len(matching)
 		}
-
 		if limit == 0 {
 			pdk.Log(pdk.LogDebug, "No tracks for "+mood.Label)
 			continue
 		}
 
-		// Build songId params for createPlaylist
 		songIDs := make([]string, limit)
 		for i := 0; i < limit; i++ {
 			songIDs[i] = matching[i].id
 		}
-
 		createPlaylist(mood.Label, songIDs)
 	}
 
@@ -455,7 +393,6 @@ func createPlaylist(name string, songIDs []string) {
 	for _, id := range songIDs {
 		params += "&songId=" + url.QueryEscape(id)
 	}
-
 	_, err := host.SubsonicAPICall("createPlaylist?" + params)
 	if err != nil {
 		pdk.Log(pdk.LogError, "Failed to create playlist '"+name+"': "+err.Error())
@@ -467,9 +404,9 @@ func createPlaylist(name string, songIDs []string) {
 // ── Helpers ──────────────────────────────────────────────────────
 
 func updateIndex(id, title, artist string) {
-	indexData, _ := host.KVStoreGet("mood:index")
+	indexData, ok, _ := host.KVStoreGet("mood:index")
 	var index map[string]string
-	if len(indexData) > 0 {
+	if ok && len(indexData) > 0 {
 		json.Unmarshal(indexData, &index)
 	}
 	if index == nil {
@@ -507,31 +444,31 @@ func moodDistance(a, b MoodScores) float64 {
 			sq(a.MoodAggressive-b.MoodAggressive) +
 			sq(a.MoodParty-b.MoodParty) +
 			sq(a.Danceability-b.Danceability) +
-			sq((a.BPM-b.BPM)/200), // Normalize BPM difference
+			sq((a.BPM-b.BPM)/200),
 	)
 }
 
 func sq(x float64) float64 { return x * x }
 
 func configString(key, defaultVal string) string {
-	val, err := host.ConfigGet(key)
-	if err != nil || val == "" {
+	val, ok := host.ConfigGet(key)
+	if !ok || val == "" {
 		return defaultVal
 	}
 	return val
 }
 
 func configInt(key string, defaultVal int) int {
-	val, err := host.ConfigGetInt(key)
-	if err != nil {
+	val, ok := host.ConfigGetInt(key)
+	if !ok {
 		return defaultVal
 	}
 	return int(val)
 }
 
 func configFloat(key string, defaultVal float64) float64 {
-	val, err := host.ConfigGet(key)
-	if err != nil || val == "" {
+	val, ok := host.ConfigGet(key)
+	if !ok || val == "" {
 		return defaultVal
 	}
 	f, err := strconv.ParseFloat(val, 64)
@@ -542,8 +479,8 @@ func configFloat(key string, defaultVal float64) float64 {
 }
 
 func configBool(key string, defaultVal bool) bool {
-	val, err := host.ConfigGet(key)
-	if err != nil || val == "" {
+	val, ok := host.ConfigGet(key)
+	if !ok || val == "" {
 		return defaultVal
 	}
 	return val == "true" || val == "1" || val == "yes"
