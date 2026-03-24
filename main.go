@@ -47,12 +47,27 @@ type AnalysisResponse struct {
 	Energy         float64 `json:"energy"`
 }
 
+// Simple mood: single score field >= threshold
 type MoodDefinition struct {
 	Key           string
 	Label         string
 	ScoreField    string
 	ThresholdKey  string
 	DefaultThresh float64
+}
+
+// Composite mood: multiple conditions that must ALL be true
+type Condition struct {
+	Field string  // score field name (mood_happy, bpm, energy, etc.)
+	Op    string  // ">=" or "<"
+	Value float64 // threshold value
+}
+
+type CompositeMoodDefinition struct {
+	Key        string
+	Label      string
+	Conditions []Condition
+	SortField  string // which field to sort by (descending)
 }
 
 var moods = []MoodDefinition{
@@ -62,6 +77,82 @@ var moods = []MoodDefinition{
 	{Key: "melancholy", Label: "Melancholy Mix", ScoreField: "mood_sad", ThresholdKey: "melancholy_threshold", DefaultThresh: 0.45},
 	{Key: "party", Label: "Party Mix", ScoreField: "mood_party", ThresholdKey: "party_threshold", DefaultThresh: 0.55},
 	{Key: "aggressive", Label: "Aggressive Mix", ScoreField: "mood_aggressive", ThresholdKey: "aggressive_threshold", DefaultThresh: 0.45},
+}
+
+var compositeMoods = []CompositeMoodDefinition{
+	{
+		Key:   "study",
+		Label: "Study Mix",
+		Conditions: []Condition{
+			{Field: "mood_relaxed", Op: ">=", Value: 0.45},
+			{Field: "energy", Op: "<", Value: 0.15},
+			{Field: "mood_aggressive", Op: "<", Value: 0.2},
+		},
+		SortField: "mood_relaxed",
+	},
+	{
+		Key:   "workout",
+		Label: "Workout Mix",
+		Conditions: []Condition{
+			{Field: "danceability", Op: ">=", Value: 0.55},
+			{Field: "energy", Op: ">=", Value: 0.12},
+			{Field: "bpm", Op: ">=", Value: 120},
+		},
+		SortField: "energy",
+	},
+	{
+		Key:   "sleep",
+		Label: "Sleep Mix",
+		Conditions: []Condition{
+			{Field: "mood_relaxed", Op: ">=", Value: 0.5},
+			{Field: "energy", Op: "<", Value: 0.08},
+			{Field: "bpm", Op: "<", Value: 100},
+		},
+		SortField: "mood_relaxed",
+	},
+	{
+		Key:   "road_trip",
+		Label: "Road Trip Mix",
+		Conditions: []Condition{
+			{Field: "mood_happy", Op: ">=", Value: 0.4},
+			{Field: "danceability", Op: ">=", Value: 0.45},
+			{Field: "energy", Op: ">=", Value: 0.1},
+		},
+		SortField: "mood_happy",
+	},
+	{
+		Key:   "cooking",
+		Label: "Cooking Mix",
+		Conditions: []Condition{
+			{Field: "mood_happy", Op: ">=", Value: 0.35},
+			{Field: "mood_relaxed", Op: ">=", Value: 0.3},
+			{Field: "danceability", Op: ">=", Value: 0.3},
+			{Field: "mood_aggressive", Op: "<", Value: 0.2},
+		},
+		SortField: "danceability",
+	},
+	{
+		Key:   "dining",
+		Label: "Dining Mix",
+		Conditions: []Condition{
+			{Field: "mood_relaxed", Op: ">=", Value: 0.4},
+			{Field: "mood_happy", Op: ">=", Value: 0.3},
+			{Field: "energy", Op: "<", Value: 0.15},
+			{Field: "mood_aggressive", Op: "<", Value: 0.15},
+		},
+		SortField: "mood_relaxed",
+	},
+	{
+		Key:   "background",
+		Label: "Background Mix",
+		Conditions: []Condition{
+			{Field: "mood_relaxed", Op: ">=", Value: 0.35},
+			{Field: "energy", Op: "<", Value: 0.12},
+			{Field: "mood_party", Op: "<", Value: 0.3},
+			{Field: "mood_aggressive", Op: "<", Value: 0.2},
+		},
+		SortField: "mood_relaxed",
+	},
 }
 
 // ── Plugin Registration ──────────────────────────────────────────
@@ -354,18 +445,48 @@ func refreshPlaylists() int32 {
 		return 0
 	}
 
+	// Simple moods (single field >= threshold)
 	for _, mood := range moods {
 		threshold := configFloat(mood.ThresholdKey, mood.DefaultThresh)
 
 		var matching []trackWithScores
 		for _, t := range allTracks {
-			if getMoodScore(t.scores, mood.ScoreField) >= threshold {
+			if getScore(t.scores, mood.ScoreField) >= threshold {
 				matching = append(matching, t)
 			}
 		}
 
 		sort.Slice(matching, func(i, j int) bool {
-			return getMoodScore(matching[i].scores, mood.ScoreField) > getMoodScore(matching[j].scores, mood.ScoreField)
+			return getScore(matching[i].scores, mood.ScoreField) > getScore(matching[j].scores, mood.ScoreField)
+		})
+
+		limit := trackCount
+		if limit > len(matching) {
+			limit = len(matching)
+		}
+		if limit == 0 {
+			pdk.Log(pdk.LogDebug, "No tracks for "+mood.Label)
+			continue
+		}
+
+		songIDs := make([]string, limit)
+		for i := 0; i < limit; i++ {
+			songIDs[i] = matching[i].id
+		}
+		createPlaylist(mood.Label, songIDs)
+	}
+
+	// Composite moods (multiple conditions)
+	for _, mood := range compositeMoods {
+		var matching []trackWithScores
+		for _, t := range allTracks {
+			if matchesAllConditions(t.scores, mood.Conditions) {
+				matching = append(matching, t)
+			}
+		}
+
+		sort.Slice(matching, func(i, j int) bool {
+			return getScore(matching[i].scores, mood.SortField) > getScore(matching[j].scores, mood.SortField)
 		})
 
 		limit := trackCount
@@ -386,6 +507,23 @@ func refreshPlaylists() int32 {
 
 	pdk.Log(pdk.LogInfo, "Mood playlists refreshed")
 	return 0
+}
+
+func matchesAllConditions(scores MoodScores, conditions []Condition) bool {
+	for _, c := range conditions {
+		val := getScore(scores, c.Field)
+		switch c.Op {
+		case ">=":
+			if val < c.Value {
+				return false
+			}
+		case "<":
+			if val >= c.Value {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func createPlaylist(name string, songIDs []string) {
@@ -417,7 +555,7 @@ func updateIndex(id, title, artist string) {
 	host.KVStoreSet("mood:index", data)
 }
 
-func getMoodScore(scores MoodScores, field string) float64 {
+func getScore(scores MoodScores, field string) float64 {
 	switch field {
 	case "mood_happy":
 		return scores.MoodHappy
@@ -431,6 +569,10 @@ func getMoodScore(scores MoodScores, field string) float64 {
 		return scores.MoodParty
 	case "danceability":
 		return scores.Danceability
+	case "bpm":
+		return scores.BPM
+	case "energy":
+		return scores.Energy
 	default:
 		return 0
 	}

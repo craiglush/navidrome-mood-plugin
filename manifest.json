@@ -3,8 +3,8 @@
   "name": "Mood Playlists",
   "id": "mood-playlists",
   "author": "Craig Lusher",
-  "version": "0.1.0",
-  "description": "Audio analysis-powered mood playlists and Instant Mix. Analyzes your music library for mood, energy, and danceability using an external analyzer service, then creates and refreshes mood-based playlists automatically.",
+  "version": "0.2.0",
+  "description": "Audio analysis-powered mood playlists and Instant Mix. Creates 13 mood playlists (Happy, Chill, Energetic, Melancholy, Party, Aggressive, Study, Workout, Sleep, Road Trip, Cooking, Dining, Background) using an external analyzer service.",
   "website": "https://github.com/craiglush/navidrome-mood-plugin",
   "config": {
     "schema": {
