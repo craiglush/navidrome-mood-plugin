@@ -1,16 +1,41 @@
 # navidrome-mood-plugin
 
-A [Navidrome](https://www.navidrome.org/) plugin that creates mood-based playlists using real audio analysis. It uses [essentia-tensorflow](https://essentia.upf.edu/) with Discogs-EffNet embeddings to analyze your music library for mood, energy, BPM, and danceability, then automatically generates and refreshes playlists like "Happy Mix", "Chill Mix", "Party Mix", and more.
+A [Navidrome](https://www.navidrome.org/) plugin that creates mood-based playlists using real audio analysis. It uses [essentia-tensorflow](https://essentia.upf.edu/) with Discogs-EffNet embeddings to analyze your music library for mood, energy, BPM, and danceability, then automatically generates and refreshes 13 mood playlists.
 
 Works with any Subsonic-compatible client (Symfonium, Sublime Music, etc.).
 
 ## Features
 
-- **6 Mood Playlists** — Automatically creates and refreshes: Happy, Chill, Energetic, Melancholy, Party, Aggressive
+- **13 Mood Playlists** — 6 simple moods + 7 composite scenario playlists, all auto-created and refreshed
 - **Mood-Aware Instant Mix** — Replaces the default Instant Mix with mood-similarity matching (Euclidean distance across mood vectors)
 - **Scheduled Analysis** — Periodically scans your library for new tracks and sends them to the analyzer
 - **Scheduled Refresh** — Regenerates mood playlists on a cron schedule so they evolve as your library grows
 - **Fully Configurable** — Mood thresholds, playlist sizes, analysis/refresh schedules, and analyzer URL are all configurable from Navidrome's plugin settings UI
+
+### Mood Playlists
+
+**Simple moods** — single score above a configurable threshold:
+
+| Playlist | Based on | Default Threshold |
+|----------|----------|-------------------|
+| Happy Mix | mood_happy | 0.55 |
+| Chill Mix | mood_relaxed | 0.55 |
+| Energetic Mix | danceability | 0.6 |
+| Melancholy Mix | mood_sad | 0.45 |
+| Party Mix | mood_party | 0.55 |
+| Aggressive Mix | mood_aggressive | 0.45 |
+
+**Composite moods** — multiple conditions that must all be true:
+
+| Playlist | Conditions | Sorted by |
+|----------|-----------|-----------|
+| Study Mix | relaxed >= 0.45, energy < 0.15, aggressive < 0.2 | relaxed |
+| Workout Mix | danceability >= 0.55, energy >= 0.12, BPM >= 120 | energy |
+| Sleep Mix | relaxed >= 0.5, energy < 0.08, BPM < 100 | relaxed |
+| Road Trip Mix | happy >= 0.4, danceability >= 0.45, energy >= 0.1 | happy |
+| Cooking Mix | happy >= 0.35, relaxed >= 0.3, danceability >= 0.3, aggressive < 0.2 | danceability |
+| Dining Mix | relaxed >= 0.4, happy >= 0.3, energy < 0.15, aggressive < 0.15 | relaxed |
+| Background Mix | relaxed >= 0.35, energy < 0.12, party < 0.3, aggressive < 0.2 | relaxed |
 
 ## Quick Start
 
@@ -54,7 +79,7 @@ The music path must match what Navidrome sees — the analyzer reads the same au
 
 The plugin will:
 - Analyze unanalyzed tracks daily at 2 AM (configurable)
-- Refresh mood playlists weekly on Sunday at 3 AM (configurable)
+- Refresh all 13 mood playlists weekly on Sunday at 3 AM (configurable)
 - Return mood-similar tracks when you use Instant Mix on any analyzed track
 
 ## Requirements
@@ -133,7 +158,7 @@ All settings are configurable from Navidrome's plugin settings UI:
 | Auto-Analyze | `true` | Automatically analyze new tracks on schedule |
 | Analysis Schedule | `0 2 * * *` | Cron expression (default: 2 AM daily) |
 | Playlist Refresh Schedule | `0 3 * * 0` | Cron expression (default: 3 AM Sundays) |
-| Tracks per Playlist | `30` | Number of tracks in each mood playlist |
+| Tracks per Playlist | `30` | Number of tracks in each mood playlist (applies to all 13) |
 | Similar Songs Count | `20` | Tracks returned for Instant Mix |
 | Happy Threshold | `0.55` | Minimum score (0-1) for happy classification |
 | Chill Threshold | `0.55` | Minimum score for chill/relaxed |
@@ -141,6 +166,8 @@ All settings are configurable from Navidrome's plugin settings UI:
 | Party Threshold | `0.55` | Minimum score for party |
 | Melancholy Threshold | `0.45` | Minimum score for sad/melancholy |
 | Aggressive Threshold | `0.45` | Minimum score for aggressive |
+
+Note: Composite mood conditions (Study, Workout, etc.) are not configurable via the UI — they use fixed thresholds tuned for their specific scenarios. The simple mood thresholds above remain fully adjustable.
 
 ## How It Works
 
@@ -161,7 +188,9 @@ All settings are configurable from Navidrome's plugin settings UI:
 
 1. **Analysis** — On schedule, the plugin iterates all tracks via Subsonic API, sends unanalyzed ones to the analyzer service, and stores mood scores in its KVStore. The analyzer extracts raw audio features via essentia-tensorflow, then applies genre/BPM context boosts so that genre-specific characteristics (like DnB's danceability) are properly reflected.
 
-2. **Playlists** — On the refresh schedule, it queries stored mood data, selects tracks above each mood's threshold (sorted by score), and creates playlists via the Subsonic API.
+2. **Playlists** — On the refresh schedule, it queries stored mood data and creates two types of playlists:
+   - **Simple moods** — selects tracks above a single threshold (sorted by that score)
+   - **Composite moods** — selects tracks matching ALL conditions (e.g., Study requires high relaxation AND low energy AND low aggression), sorted by a primary score field
 
 3. **Instant Mix** — When triggered on a track, calculates Euclidean distance between the source track's mood vector and all analyzed tracks, returning the closest matches.
 
@@ -191,10 +220,9 @@ zip mood-playlists.ndp plugin.wasm manifest.json
 
 Contributions welcome! Some ideas:
 
-- [ ] Web UI for triggering analysis on demand
 - [ ] Per-user mood playlists
 - [ ] "Mood of the day" rotating playlist
-- [ ] BPM-range playlists (workout, study, etc.)
+- [ ] Configurable thresholds for composite moods via the settings UI
 - [ ] Integration with Last.fm listening history for personalized moods
 
 ## License
