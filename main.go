@@ -30,6 +30,8 @@ type MoodScores struct {
 	Danceability   float64 `json:"danceability"`
 	BPM            float64 `json:"bpm"`
 	Energy         float64 `json:"energy"`
+	Arousal        float64 `json:"arousal"`
+	Valence        float64 `json:"valence"`
 }
 
 type AnalysisResponse struct {
@@ -45,6 +47,8 @@ type AnalysisResponse struct {
 	MoodAggressive float64 `json:"mood_aggressive"`
 	MoodParty      float64 `json:"mood_party"`
 	Energy         float64 `json:"energy"`
+	Arousal        float64 `json:"arousal"`
+	Valence        float64 `json:"valence"`
 }
 
 // Simple mood: single score field >= threshold
@@ -87,6 +91,7 @@ var compositeMoods = []CompositeMoodDefinition{
 			{Field: "mood_relaxed", Op: ">=", Value: 0.45},
 			{Field: "energy", Op: "<", Value: 0.15},
 			{Field: "mood_aggressive", Op: "<", Value: 0.2},
+			{Field: "arousal", Op: "<", Value: 0.4},
 		},
 		SortField: "mood_relaxed",
 	},
@@ -97,6 +102,7 @@ var compositeMoods = []CompositeMoodDefinition{
 			{Field: "danceability", Op: ">=", Value: 0.55},
 			{Field: "energy", Op: ">=", Value: 0.12},
 			{Field: "bpm", Op: ">=", Value: 120},
+			{Field: "arousal", Op: ">=", Value: 0.6},
 		},
 		SortField: "energy",
 	},
@@ -107,6 +113,7 @@ var compositeMoods = []CompositeMoodDefinition{
 			{Field: "mood_relaxed", Op: ">=", Value: 0.5},
 			{Field: "energy", Op: "<", Value: 0.08},
 			{Field: "bpm", Op: "<", Value: 100},
+			{Field: "arousal", Op: "<", Value: 0.3},
 		},
 		SortField: "mood_relaxed",
 	},
@@ -395,6 +402,8 @@ func callAnalyzer(baseURL, filePath string) (*MoodScores, error) {
 		Danceability:   analysis.Danceability,
 		BPM:            analysis.BPM,
 		Energy:         analysis.Energy,
+		Arousal:        analysis.Arousal,
+		Valence:        analysis.Valence,
 	}, nil
 }
 
@@ -573,6 +582,10 @@ func getScore(scores MoodScores, field string) float64 {
 		return scores.BPM
 	case "energy":
 		return scores.Energy
+	case "arousal":
+		return scores.Arousal
+	case "valence":
+		return scores.Valence
 	default:
 		return 0
 	}
@@ -586,6 +599,8 @@ func moodDistance(a, b MoodScores) float64 {
 			sq(a.MoodAggressive-b.MoodAggressive) +
 			sq(a.MoodParty-b.MoodParty) +
 			sq(a.Danceability-b.Danceability) +
+			sq(a.Arousal-b.Arousal) +
+			sq(a.Valence-b.Valence) +
 			sq((a.BPM-b.BPM)/200),
 	)
 }
