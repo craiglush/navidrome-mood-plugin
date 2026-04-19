@@ -1,0 +1,208 @@
+{
+  "$schema": "https://raw.githubusercontent.com/navidrome/navidrome/refs/heads/master/plugins/manifest-schema.json",
+  "name": "Mood Playlists",
+  "id": "mood-playlists",
+  "author": "Craig Lusher",
+  "version": "0.3.0",
+  "description": "Audio analysis-powered mood playlists and Instant Mix. Creates 13 mood playlists (Happy, Chill, Energetic, Melancholy, Party, Aggressive, Study, Workout, Sleep, Road Trip, Cooking, Dining, Background) using an external analyzer service.",
+  "website": "https://github.com/craiglush/navidrome-mood-plugin",
+  "config": {
+    "schema": {
+      "type": "object",
+      "properties": {
+        "analyzer_url": {
+          "type": "string",
+          "title": "Analyzer Service URL",
+          "description": "URL of the mood analyzer HTTP service (e.g., http://music-manager:5000)",
+          "default": "http://music-manager:5000"
+        },
+        "auto_analyze": {
+          "type": "boolean",
+          "title": "Auto-Analyze New Tracks",
+          "description": "Automatically analyze new tracks on a schedule",
+          "default": true
+        },
+        "analyze_schedule": {
+          "type": "string",
+          "title": "Analysis Schedule (cron)",
+          "description": "Cron expression for when to scan for and analyze new tracks",
+          "default": "0 2 * * *"
+        },
+        "playlist_refresh_schedule": {
+          "type": "string",
+          "title": "Playlist Refresh Schedule (cron)",
+          "description": "Cron expression for when to refresh mood playlists",
+          "default": "0 3 * * 0"
+        },
+        "playlist_track_count": {
+          "type": "integer",
+          "title": "Tracks per Playlist",
+          "description": "Number of tracks in each mood playlist",
+          "default": 30,
+          "minimum": 10,
+          "maximum": 200
+        },
+        "similar_songs_count": {
+          "type": "integer",
+          "title": "Similar Songs Count",
+          "description": "Number of similar songs to return for Instant Mix",
+          "default": 20,
+          "minimum": 5,
+          "maximum": 100
+        },
+        "happy_threshold": {
+          "type": "number",
+          "title": "Happy Threshold",
+          "description": "Minimum score (0-1) for happy mood classification",
+          "default": 0.55
+        },
+        "chill_threshold": {
+          "type": "number",
+          "title": "Chill Threshold",
+          "description": "Minimum score (0-1) for chill/relaxed mood classification",
+          "default": 0.55
+        },
+        "energetic_threshold": {
+          "type": "number",
+          "title": "Energetic Threshold",
+          "description": "Minimum score (0-1) for energetic/danceable classification",
+          "default": 0.6
+        },
+        "party_threshold": {
+          "type": "number",
+          "title": "Party Threshold",
+          "description": "Minimum score (0-1) for party mood classification",
+          "default": 0.55
+        },
+        "melancholy_threshold": {
+          "type": "number",
+          "title": "Melancholy Threshold",
+          "description": "Minimum score (0-1) for sad/melancholy mood classification",
+          "default": 0.45
+        },
+        "aggressive_threshold": {
+          "type": "number",
+          "title": "Aggressive Threshold",
+          "description": "Minimum score (0-1) for aggressive mood classification",
+          "default": 0.45
+        }
+      }
+    },
+    "uiSchema": {
+      "type": "VerticalLayout",
+      "elements": [
+        {
+          "type": "Group",
+          "label": "Analyzer Service",
+          "elements": [
+            {
+              "type": "Control",
+              "scope": "#/properties/analyzer_url"
+            },
+            {
+              "type": "HorizontalLayout",
+              "elements": [
+                {
+                  "type": "Control",
+                  "scope": "#/properties/auto_analyze"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/analyze_schedule"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "Group",
+          "label": "Playlists",
+          "elements": [
+            {
+              "type": "HorizontalLayout",
+              "elements": [
+                {
+                  "type": "Control",
+                  "scope": "#/properties/playlist_track_count"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/similar_songs_count"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/playlist_refresh_schedule"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "Group",
+          "label": "Mood Thresholds",
+          "elements": [
+            {
+              "type": "HorizontalLayout",
+              "elements": [
+                {
+                  "type": "Control",
+                  "scope": "#/properties/happy_threshold"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/chill_threshold"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/energetic_threshold"
+                }
+              ]
+            },
+            {
+              "type": "HorizontalLayout",
+              "elements": [
+                {
+                  "type": "Control",
+                  "scope": "#/properties/party_threshold"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/melancholy_threshold"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/aggressive_threshold"
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "permissions": {
+    "http": {
+      "reason": "Call the mood analyzer service for audio analysis",
+      "requiredHosts": ["*"]
+    },
+    "library": {
+      "reason": "Read track metadata and file paths for analysis"
+    },
+    "subsonicapi": {
+      "reason": "Create and manage mood-based playlists"
+    },
+    "scheduler": {
+      "reason": "Schedule periodic analysis and playlist refresh tasks"
+    },
+    "kvstore": {
+      "reason": "Store mood analysis scores for each track",
+      "maxSize": "50MB"
+    },
+    "config": {
+      "reason": "Read user-configured thresholds and service URLs"
+    },
+    "users": {
+      "reason": "Create per-user mood playlists"
+    }
+  }
+}

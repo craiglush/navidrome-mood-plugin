@@ -1,0 +1,15 @@
+# Example: Add this service alongside your Navidrome docker-compose.yml
+#
+# The analyzer needs read access to the same music files as Navidrome.
+# Set MUSIC_PATH to your music library root.
+
+services:
+  mood-analyzer:
+    build:
+      context: ./analyzer-service
+    container_name: mood-analyzer
+    ports:
+      - "8000:8000"
+    volumes:
+      - ${MUSIC_PATH:-/path/to/music}:/music:ro
+    restart: unless-stopped

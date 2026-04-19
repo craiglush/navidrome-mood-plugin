@@ -1,0 +1,5 @@
+fastapi>=0.115
+uvicorn>=0.34
+essentia-tensorflow==2.1b6.dev1389
+mutagen>=1.47
+numpy>=2.0

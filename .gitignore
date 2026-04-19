@@ -1,0 +1,4 @@
+plugin.wasm
+*.ndp
+screenshots/
+.claude/
