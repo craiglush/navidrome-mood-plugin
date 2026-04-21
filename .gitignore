@@ -2,3 +2,4 @@ plugin.wasm
 *.ndp
 screenshots/
 .claude/
+session_notes.md

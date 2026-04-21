@@ -37,6 +37,10 @@ Works with any Subsonic-compatible client (Symfonium, Sublime Music, etc.).
 | Dining Mix | relaxed >= 0.4, happy >= 0.3, energy < 0.15, aggressive < 0.15 | relaxed |
 | Background Mix | relaxed >= 0.35, energy < 0.12, party < 0.3, aggressive < 0.2 | relaxed |
 
+## Documentation
+
+For detailed setup instructions, full configuration reference, troubleshooting, and monitoring guidance, see **[HELP.md](HELP.md)**.
+
 ## Quick Start
 
 ### 1. Start the Analyzer Service

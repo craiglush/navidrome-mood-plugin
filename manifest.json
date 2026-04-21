@@ -18,13 +18,15 @@
         },
         "navidrome_user": {
           "type": "string",
-          "title": "Navidrome Admin Username",
-          "description": "Admin username for Navidrome API access (required for scheduled tasks)"
+          "title": "Navidrome Username",
+          "description": "Username for Navidrome API access (required for scheduled tasks)",
+          "writeOnly": true
         },
         "navidrome_password": {
           "type": "string",
-          "title": "Navidrome Admin Password",
-          "description": "Admin password for Navidrome API access (required for scheduled tasks)"
+          "title": "Navidrome Password",
+          "description": "Password for Navidrome API access (required for scheduled tasks)",
+          "writeOnly": true
         },
         "analyzer_url": {
           "type": "string",
@@ -72,6 +74,14 @@
           "minimum": 5,
           "maximum": 100
         },
+        "max_tracks_per_artist": {
+          "type": "integer",
+          "title": "Max Tracks per Artist",
+          "description": "Maximum number of tracks from the same artist in any single playlist (0 = no limit)",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 50
+        },
         "happy_threshold": {
           "type": "number",
           "title": "Happy Threshold",
@@ -106,7 +116,7 @@
           "type": "number",
           "title": "Aggressive Threshold",
           "description": "Minimum score (0-1) for aggressive mood classification",
-          "default": 0.45
+          "default": 0.55
         }
       }
     },
@@ -126,11 +136,17 @@
                 },
                 {
                   "type": "Control",
-                  "scope": "#/properties/navidrome_user"
+                  "scope": "#/properties/navidrome_user",
+                  "options": {
+                    "format": "password"
+                  }
                 },
                 {
                   "type": "Control",
-                  "scope": "#/properties/navidrome_password"
+                  "scope": "#/properties/navidrome_password",
+                  "options": {
+                    "format": "password"
+                  }
                 }
               ]
             }
@@ -178,6 +194,10 @@
                 {
                   "type": "Control",
                   "scope": "#/properties/playlist_track_count"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/max_tracks_per_artist"
                 },
                 {
                   "type": "Control",
@@ -250,7 +270,7 @@
     },
     "taskqueue": {
       "reason": "Process audio analysis in background without blocking the scheduler",
-      "maxConcurrency": 2
+      "maxConcurrency": 4
     },
     "kvstore": {
       "reason": "Store mood analysis scores for each track",

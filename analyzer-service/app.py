@@ -11,8 +11,8 @@ Run with: uvicorn app:app --host 0.0.0.0 --port 8000
 
 import logging
 import os
+import subprocess
 import tempfile
-import urllib.request
 
 import mutagen
 import numpy as np
@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 app = FastAPI(title="Mood Analyzer", version="1.1.0")
 
 MODELS_DIR = os.environ.get("MODELS_DIR", "/app/models")
+ANALYSIS_DURATION = 90.0  # seconds — cap audio loaded per track for predictable analysis time
 
 _es = None
 
@@ -151,6 +152,9 @@ def _analyze_path(file_path: str) -> dict:
     # BPM
     try:
         audio_44k = es.MonoLoader(filename=file_path, sampleRate=44100)()
+        max_samples = int(ANALYSIS_DURATION * 44100)
+        if len(audio_44k) > max_samples:
+            audio_44k = audio_44k[:max_samples]
         bpm = es.RhythmExtractor2013(method="multifeature")(audio_44k)[0]
         results["bpm"] = round(float(bpm), 1)
     except Exception as e:
@@ -165,6 +169,9 @@ def _analyze_path(file_path: str) -> dict:
 
     # Embeddings
     audio_16k = es.MonoLoader(filename=file_path, sampleRate=16000, resampleQuality=4)()
+    max_samples_16k = int(ANALYSIS_DURATION * 16000)
+    if len(audio_16k) > max_samples_16k:
+        audio_16k = audio_16k[:max_samples_16k]
     effnet_path = os.path.join(MODELS_DIR, "discogs-effnet-bs64-1.pb")
 
     try:
@@ -234,20 +241,40 @@ def analyze_file(req: AnalyzeRequest):
 
 @app.post("/api/analysis/url")
 def analyze_url(req: AnalyzeUrlRequest):
-    suffix = ".audio"
-    url_lower = req.url.lower().split("?")[0]
-    for ext in (".flac", ".mp3", ".m4a", ".ogg", ".opus", ".wav", ".aac"):
-        if url_lower.endswith(ext):
-            suffix = ext
-            break
+    """Fetch audio from a URL and analyze it.
 
+    Uses ffmpeg to stream only the first ANALYSIS_DURATION seconds directly
+    from the URL, converting to a small mono WAV (~7 MB) regardless of the
+    source format or bitrate. This avoids downloading multi-hundred-MB FLAC
+    files in full before analysis can begin.
+    """
     tmp_path = None
     try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp_path = tmp.name
-        urllib.request.urlretrieve(req.url, tmp_path)
+
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", req.url,
+                "-t", str(ANALYSIS_DURATION),
+                "-ar", "44100",
+                "-ac", "1",
+                "-sample_fmt", "s16",
+                tmp_path,
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            err = result.stderr.decode(errors="replace").strip()
+            logger.error(f"ffmpeg failed (rc={result.returncode}):\n{err}")
+            last_line = err.splitlines()[-1] if err else "ffmpeg failed"
+            raise Exception(last_line)
+
         return _analyze_path(tmp_path)
     except Exception as e:
+        logger.error(f"URL analysis error ({type(e).__name__}): {e}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch or analyze URL: {e}")
     finally:
         if tmp_path and os.path.exists(tmp_path):

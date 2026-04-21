@@ -6,9 +6,12 @@
 package main
 
 import (
+	"crypto/md5"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"net/url"
 	"sort"
 	"strconv"
@@ -51,13 +54,20 @@ type AnalysisResponse struct {
 	Valence        float64 `json:"valence"`
 }
 
-// Simple mood: single score field >= threshold
+type trackWithScores struct {
+	id, name, artist string
+	scores           MoodScores
+}
+
+// Simple mood: single score field >= threshold, with optional exclusion conditions.
+// A track is excluded if it matches ANY condition in Exclude.
 type MoodDefinition struct {
 	Key           string
 	Label         string
 	ScoreField    string
 	ThresholdKey  string
 	DefaultThresh float64
+	Exclude       []Condition
 }
 
 // Composite mood: multiple conditions that must ALL be true
@@ -75,12 +85,28 @@ type CompositeMoodDefinition struct {
 }
 
 var moods = []MoodDefinition{
-	{Key: "happy", Label: "Happy Mix", ScoreField: "mood_happy", ThresholdKey: "happy_threshold", DefaultThresh: 0.55},
-	{Key: "chill", Label: "Chill Mix", ScoreField: "mood_relaxed", ThresholdKey: "chill_threshold", DefaultThresh: 0.55},
+	{Key: "happy", Label: "Happy Mix", ScoreField: "mood_happy", ThresholdKey: "happy_threshold", DefaultThresh: 0.55,
+		Exclude: []Condition{
+			{Field: "mood_sad", Op: ">=", Value: 0.4},
+		}},
+	{Key: "chill", Label: "Chill Mix", ScoreField: "mood_relaxed", ThresholdKey: "chill_threshold", DefaultThresh: 0.55,
+		Exclude: []Condition{
+			{Field: "mood_aggressive", Op: ">=", Value: 0.35},
+		}},
 	{Key: "energetic", Label: "Energetic Mix", ScoreField: "danceability", ThresholdKey: "energetic_threshold", DefaultThresh: 0.6},
-	{Key: "melancholy", Label: "Melancholy Mix", ScoreField: "mood_sad", ThresholdKey: "melancholy_threshold", DefaultThresh: 0.45},
-	{Key: "party", Label: "Party Mix", ScoreField: "mood_party", ThresholdKey: "party_threshold", DefaultThresh: 0.55},
-	{Key: "aggressive", Label: "Aggressive Mix", ScoreField: "mood_aggressive", ThresholdKey: "aggressive_threshold", DefaultThresh: 0.45},
+	{Key: "melancholy", Label: "Melancholy Mix", ScoreField: "mood_sad", ThresholdKey: "melancholy_threshold", DefaultThresh: 0.45,
+		Exclude: []Condition{
+			{Field: "mood_happy", Op: ">=", Value: 0.5},
+		}},
+	{Key: "party", Label: "Party Mix", ScoreField: "mood_party", ThresholdKey: "party_threshold", DefaultThresh: 0.55,
+		Exclude: []Condition{
+			{Field: "mood_sad", Op: ">=", Value: 0.4},
+		}},
+	{Key: "aggressive", Label: "Aggressive Mix", ScoreField: "mood_aggressive", ThresholdKey: "aggressive_threshold", DefaultThresh: 0.55,
+		Exclude: []Condition{
+			{Field: "mood_relaxed", Op: ">=", Value: 0.35},
+			{Field: "mood_happy", Op: ">=", Value: 0.45},
+		}},
 }
 
 var compositeMoods = []CompositeMoodDefinition{
@@ -197,7 +223,7 @@ func onInit() int32 {
 	// Clear any stale tasks from previous runs, then ensure the queue exists
 	host.TaskClearQueue("mood-analysis")
 	if err := host.TaskCreateQueue("mood-analysis", host.QueueConfig{
-		Concurrency: 2,
+		Concurrency: 4,
 		MaxRetries:  3,
 	}); err != nil {
 		pdk.Log(pdk.LogDebug, "Task queue init: "+err.Error())
@@ -364,7 +390,6 @@ func runAnalysis() int32 {
 		for _, song := range songs {
 			taskData, _ := json.Marshal(analysisTask{
 				ID:     song.ID,
-				Path:   musicPath + "/" + song.Path,
 				Title:  song.Title,
 				Artist: song.Artist,
 			})
@@ -414,11 +439,10 @@ func onTaskExecute() int32 {
 	}
 
 	analyzerURL := configString("analyzer_url", "http://mood-analyzer:8000")
-	ndURL := strings.TrimRight(configString("navidrome_url", "http://navidrome:4533"), "/")
+	ndURL := configString("navidrome_url", "http://navidrome:4533")
 	user := configString("navidrome_user", "")
 	pass := configString("navidrome_password", "")
-	streamURL := fmt.Sprintf("%s/rest/stream?id=%s&u=%s&p=%s&v=1.16.1&c=mood-plugin",
-		ndURL, url.QueryEscape(task.ID), url.QueryEscape(user), url.QueryEscape(pass))
+	streamURL := subsonicStreamURL(ndURL, user, pass, task.ID)
 
 	scores, err := callAnalyzerURL(analyzerURL, streamURL)
 	if err != nil {
@@ -512,6 +536,36 @@ func callAnalyzer(baseURL, filePath string) (*MoodScores, error) {
 
 // ── Playlist Generation ──────────────────────────────────────────
 
+// selectTracks picks up to limit tracks from a sorted candidate list,
+// allowing at most maxPerArtist tracks from any single artist.
+// An empty or blank artist name is treated as "unknown" and counted together.
+func selectTracks(sorted []trackWithScores, limit, maxPerArtist int) []string {
+	artistCount := make(map[string]int)
+	seen := make(map[string]bool) // dedup by normalised title+artist
+	var ids []string
+	for _, t := range sorted {
+		if len(ids) >= limit {
+			break
+		}
+		artist := strings.ToLower(strings.TrimSpace(t.artist))
+		if artist == "" {
+			artist = "__unknown__"
+		}
+		title := strings.ToLower(strings.TrimSpace(t.name))
+		dupKey := title + "\x00" + artist
+		if seen[dupKey] {
+			continue
+		}
+		if maxPerArtist > 0 && artistCount[artist] >= maxPerArtist {
+			continue
+		}
+		ids = append(ids, t.id)
+		artistCount[artist]++
+		seen[dupKey] = true
+	}
+	return ids
+}
+
 func refreshPlaylists() int32 {
 	pdk.Log(pdk.LogInfo, "Refreshing mood playlists...")
 	trackCount := configInt("playlist_track_count", 30)
@@ -526,11 +580,6 @@ func refreshPlaylists() int32 {
 	if err := json.Unmarshal(indexData, &trackIndex); err != nil {
 		pdk.Log(pdk.LogError, "Failed to parse track index: "+err.Error())
 		return 1
-	}
-
-	type trackWithScores struct {
-		id, name, artist string
-		scores           MoodScores
 	}
 
 	var allTracks []trackWithScores
@@ -557,13 +606,30 @@ func refreshPlaylists() int32 {
 		return 0
 	}
 
+	maxPerArtist := configInt("max_tracks_per_artist", 3)
+
 	// Simple moods (single field >= threshold)
 	for _, mood := range moods {
 		threshold := configFloat(mood.ThresholdKey, mood.DefaultThresh)
 
 		var matching []trackWithScores
 		for _, t := range allTracks {
-			if getScore(t.scores, mood.ScoreField) >= threshold {
+			if getScore(t.scores, mood.ScoreField) < threshold {
+				continue
+			}
+			excluded := false
+			for _, ex := range mood.Exclude {
+				val := getScore(t.scores, ex.Field)
+				if ex.Op == ">=" && val >= ex.Value {
+					excluded = true
+					break
+				}
+				if ex.Op == "<" && val < ex.Value {
+					excluded = true
+					break
+				}
+			}
+			if !excluded {
 				matching = append(matching, t)
 			}
 		}
@@ -572,18 +638,10 @@ func refreshPlaylists() int32 {
 			return getScore(matching[i].scores, mood.ScoreField) > getScore(matching[j].scores, mood.ScoreField)
 		})
 
-		limit := trackCount
-		if limit > len(matching) {
-			limit = len(matching)
-		}
-		if limit == 0 {
+		songIDs := selectTracks(matching, trackCount, maxPerArtist)
+		if len(songIDs) == 0 {
 			pdk.Log(pdk.LogDebug, "No tracks for "+mood.Label)
 			continue
-		}
-
-		songIDs := make([]string, limit)
-		for i := 0; i < limit; i++ {
-			songIDs[i] = matching[i].id
 		}
 		createPlaylist(mood.Label, songIDs)
 	}
@@ -601,18 +659,10 @@ func refreshPlaylists() int32 {
 			return getScore(matching[i].scores, mood.SortField) > getScore(matching[j].scores, mood.SortField)
 		})
 
-		limit := trackCount
-		if limit > len(matching) {
-			limit = len(matching)
-		}
-		if limit == 0 {
+		songIDs := selectTracks(matching, trackCount, maxPerArtist)
+		if len(songIDs) == 0 {
 			pdk.Log(pdk.LogDebug, "No tracks for "+mood.Label)
 			continue
-		}
-
-		songIDs := make([]string, limit)
-		for i := 0; i < limit; i++ {
-			songIDs[i] = matching[i].id
 		}
 		createPlaylist(mood.Label, songIDs)
 	}
@@ -649,6 +699,32 @@ func createPlaylist(name string, songIDs []string) {
 		return
 	}
 	pdk.Log(pdk.LogInfo, fmt.Sprintf("Created playlist '%s' with %d tracks", name, len(songIDs)))
+}
+
+// ── Subsonic auth helpers ─────────────────────────────────────────
+
+// subsonicTokenAuth returns token-auth query params (t= and s=) for the Subsonic API.
+// This avoids embedding the raw password in URLs — t = MD5(password + salt).
+func subsonicTokenAuth(pass string) (token, salt string) {
+	const letters = "abcdefghijklmnopqrstuvwxyz0123456789"
+	b := make([]byte, 10)
+	for i := range b {
+		b[i] = letters[rand.Intn(len(letters))]
+	}
+	salt = string(b)
+	h := md5.Sum([]byte(pass + salt))
+	token = hex.EncodeToString(h[:])
+	return
+}
+
+// subsonicStreamURL builds a Subsonic stream URL using token auth instead of plain password.
+func subsonicStreamURL(ndURL, user, pass, trackID string) string {
+	t, s := subsonicTokenAuth(pass)
+	return fmt.Sprintf("%s/rest/stream?id=%s&u=%s&t=%s&s=%s&v=1.16.1&c=mood-plugin",
+		strings.TrimRight(ndURL, "/"),
+		url.QueryEscape(trackID),
+		url.QueryEscape(user),
+		t, s)
 }
 
 // ── Subsonic HTTP helper (for scheduler context where no user is injected) ───
