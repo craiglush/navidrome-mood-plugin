@@ -29,25 +29,37 @@ The plugin has two parts that work together:
 ```
 Navidrome (+ Plugin)                    Analyzer Service (Docker)
 ┌──────────────────────────────┐        ┌─────────────────────────────┐
-│  Scheduler fires nightly     │        │  FastAPI + essentia-         │
-│  → queues all tracks         │──────> │  tensorflow                 │
+│  Analysis scheduler (nightly)│        │  FastAPI + essentia-         │
+│  → queues new tracks         │──────> │  tensorflow                 │
 │                              │  HTTP  │                             │
-│  Background workers stream   │        │  1. Receives first 90s of   │
+│  Background workers stream   │        │  1. Receives first 120s of  │
 │  audio to analyzer           │        │     audio via HTTP stream   │
 │                              │        │  2. Runs TensorFlow mood    │
 │  Analyzer returns scores     │ <───── │     classification models   │
 │  → stored in KV store        │  JSON  │  3. Returns mood scores     │
 │                              │        └─────────────────────────────┘
-│  Weekly refresh              │
+│  Re-analysis scheduler       │
+│  → re-queues uncertain tracks│
+│  → re-queues random % of lib │
+│                              │
+│  Playlist refresh (weekly)   │
 │  → reads scores from store   │
 │  → builds 13 playlists       │
-│  → saves via Subsonic API    │
+│  → updates via Subsonic API  │
 └──────────────────────────────┘
 ```
 
 **The analyzer service streams audio directly from Navidrome over HTTP — it does not need access to your music files.**
 
 Each track's first 120 seconds is analyzed for: BPM, energy, danceability, and five mood scores (happy, sad, relaxed, aggressive, party). Results are stored inside Navidrome and used to build playlists and power Instant Mix.
+
+The plugin runs **three independent schedules**:
+
+| Schedule | Default | Purpose |
+|---|---|---|
+| Analysis | `0 2 * * *` | Queues any new unanalyzed tracks nightly |
+| Re-analysis | `0 4 1 * *` | Re-queues uncertain tracks and a random % of the library monthly |
+| Playlist Refresh | `0 3 * * 0` | Rebuilds all 13 playlists weekly |
 
 ---
 
@@ -222,9 +234,13 @@ You should see `{"subsonic-response":{"status":"ok",...}}`.
 |---------|---------|-------------|
 | Auto-Analyze | `true` | Whether to run analysis on the schedule below |
 | Analysis Schedule | `0 2 * * *` | When to scan for and analyze unanalyzed tracks (2 AM daily) |
+| Re-analyze Uncertain Tracks | `true` | Re-queue tracks with low-confidence scores on the re-analysis schedule |
+| Random Re-analysis % | `0` | Percentage of library to randomly re-analyze each re-analysis run. Set to e.g. `5` to gradually refresh scores. |
+| Re-analysis Schedule | `0 4 1 * *` | When to run the dedicated re-analysis pass (1st of month, 4 AM) |
 | Playlist Refresh Schedule | `0 3 * * 0` | When to rebuild all playlists (3 AM every Sunday) |
-| Tracks per Playlist | `30` | Maximum tracks in each playlist |
-| Max Tracks per Artist | `3` | Maximum tracks from any one artist in a playlist. Prevents one artist dominating. Set to `0` for no limit. |
+| Tracks per Playlist | `50` | Maximum tracks in each playlist |
+| Variation Pool | `3` | Weekly variation multiplier — playlists draw randomly from the top N × pool tracks |
+| Max Tracks per Artist | `3` | Maximum tracks from any one artist in a playlist. Set to `0` for no limit. |
 | Similar Songs Count | `20` | Tracks returned when using Instant Mix |
 
 Save settings after making any changes.
@@ -426,8 +442,9 @@ Each refresh updates existing playlists in-place rather than creating new ones. 
 | `playlist_track_count` | `30` | 10 | 200 | Maximum tracks per playlist |
 | `max_tracks_per_artist` | `3` | 0 | 50 | Maximum tracks per artist per playlist (0 = no limit) |
 | `playlist_variation_pool` | `3` | 1 | 10 | Shuffle top N × pool tracks before picking; higher = more weekly variety (1 = always same tracks) |
-| `reanalyze_uncertain` | `true` | — | — | Automatically re-analyze tracks with low-confidence scores after each full library pass |
-| `reanalyze_percent` | `0` | 0 | 20 | Percentage of library to randomly re-analyze each run (0 = disabled) |
+| `reanalyze_uncertain` | `true` | — | — | Automatically re-analyze tracks with low-confidence scores |
+| `reanalyze_percent` | `0` | 0 | 20 | Percentage of library to randomly re-analyze each re-analysis run (0 = disabled) |
+| `reanalyze_schedule` | `0 4 1 * *` | — | — | Cron expression for the dedicated re-analysis pass |
 | `similar_songs_count` | `20` | 5 | 100 | Tracks returned for Instant Mix |
 | `happy_threshold` | `0.55` | 0 | 1 | Minimum score for Happy Mix |
 | `chill_threshold` | `0.40` | 0 | 1 | Minimum score for Chill Mix |
