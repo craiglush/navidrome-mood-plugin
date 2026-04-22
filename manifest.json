@@ -69,7 +69,7 @@
         "reanalyze_schedule": {
           "type": "string",
           "title": "Re-analysis Schedule (cron)",
-          "description": "When to run the dedicated re-analysis pass (uncertain tracks + random %). Default: 1st of each month at 4 AM",
+          "description": "When to run the dedicated re-analysis pass (uncertain tracks + random %).",
           "default": "0 4 1 * *"
         },
         "playlist_refresh_schedule": {
@@ -207,7 +207,12 @@
                 {
                   "type": "Control",
                   "scope": "#/properties/analyze_schedule"
-                },
+                }
+              ]
+            },
+            {
+              "type": "HorizontalLayout",
+              "elements": [
                 {
                   "type": "Control",
                   "scope": "#/properties/reanalyze_uncertain"
