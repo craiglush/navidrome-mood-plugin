@@ -563,11 +563,29 @@ func callAnalyzer(baseURL, filePath string) (*MoodScores, error) {
 // selectTracks picks up to limit tracks from a sorted candidate list,
 // allowing at most maxPerArtist tracks from any single artist.
 // An empty or blank artist name is treated as "unknown" and counted together.
-func selectTracks(sorted []trackWithScores, limit, maxPerArtist int) []string {
+// poolMultiplier controls weekly variation: the top limit*poolMultiplier tracks
+// are shuffled before selection so each run draws from the same quality pool
+// but produces a different playlist. Set to 1 to disable shuffling.
+func selectTracks(sorted []trackWithScores, limit, maxPerArtist, poolMultiplier int) []string {
+	// Build candidate pool from top-scoring tracks and shuffle for variation
+	pool := sorted
+	if poolMultiplier > 1 && len(sorted) > limit {
+		poolSize := limit * poolMultiplier
+		if poolSize > len(sorted) {
+			poolSize = len(sorted)
+		}
+		candidates := make([]trackWithScores, poolSize)
+		copy(candidates, sorted[:poolSize])
+		rand.Shuffle(len(candidates), func(i, j int) {
+			candidates[i], candidates[j] = candidates[j], candidates[i]
+		})
+		pool = candidates
+	}
+
 	artistCount := make(map[string]int)
 	seen := make(map[string]bool) // dedup by normalised title+artist
 	var ids []string
-	for _, t := range sorted {
+	for _, t := range pool {
 		if len(ids) >= limit {
 			break
 		}
@@ -593,6 +611,7 @@ func selectTracks(sorted []trackWithScores, limit, maxPerArtist int) []string {
 func refreshPlaylists() int32 {
 	pdk.Log(pdk.LogInfo, "Refreshing mood playlists...")
 	trackCount := configInt("playlist_track_count", 30)
+	poolMultiplier := configInt("playlist_variation_pool", 3)
 	existingIDs := getExistingPlaylistIDs()
 
 	indexData, ok, err := host.KVStoreGet("mood:index")
@@ -663,7 +682,7 @@ func refreshPlaylists() int32 {
 			return getScore(matching[i].scores, mood.ScoreField) > getScore(matching[j].scores, mood.ScoreField)
 		})
 
-		songIDs := selectTracks(matching, trackCount, maxPerArtist)
+		songIDs := selectTracks(matching, trackCount, maxPerArtist, poolMultiplier)
 		if len(songIDs) == 0 {
 			pdk.Log(pdk.LogDebug, "No tracks for "+mood.Label)
 			continue
@@ -684,7 +703,7 @@ func refreshPlaylists() int32 {
 			return getScore(matching[i].scores, mood.SortField) > getScore(matching[j].scores, mood.SortField)
 		})
 
-		songIDs := selectTracks(matching, trackCount, maxPerArtist)
+		songIDs := selectTracks(matching, trackCount, maxPerArtist, poolMultiplier)
 		if len(songIDs) == 0 {
 			pdk.Log(pdk.LogDebug, "No tracks for "+mood.Label)
 			continue

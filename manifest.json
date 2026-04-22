@@ -82,6 +82,14 @@
           "minimum": 0,
           "maximum": 50
         },
+        "playlist_variation_pool": {
+          "type": "integer",
+          "title": "Playlist Variation Pool",
+          "description": "Controls weekly variation: playlists are drawn randomly from the top N × this many qualifying tracks. Higher = more variety between refreshes (1 = always the same top tracks)",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10
+        },
         "happy_threshold": {
           "type": "number",
           "title": "Happy Threshold",
@@ -198,6 +206,10 @@
                 {
                   "type": "Control",
                   "scope": "#/properties/max_tracks_per_artist"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/playlist_variation_pool"
                 },
                 {
                   "type": "Control",
