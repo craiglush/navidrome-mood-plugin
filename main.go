@@ -16,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/navidrome/navidrome/plugins/pdk/go/host"
 	"github.com/navidrome/navidrome/plugins/pdk/go/metadata"
@@ -111,78 +112,71 @@ var moods = []MoodDefinition{
 
 var compositeMoods = []CompositeMoodDefinition{
 	{
+		// Calm, focused — exclude aggressive and party tracks; sort by most relaxed
 		Key:   "study",
 		Label: "Study Mix",
 		Conditions: []Condition{
-			{Field: "mood_relaxed", Op: ">=", Value: 0.45},
-			{Field: "energy", Op: "<", Value: 0.15},
-			{Field: "mood_aggressive", Op: "<", Value: 0.2},
-			{Field: "arousal", Op: "<", Value: 0.4},
+			{Field: "mood_aggressive", Op: "<", Value: 0.45},
+			{Field: "mood_party", Op: "<", Value: 0.50},
 		},
 		SortField: "mood_relaxed",
 	},
 	{
+		// High-energy movement — exclude slow/sad tracks; sort by most danceable
 		Key:   "workout",
 		Label: "Workout Mix",
 		Conditions: []Condition{
-			{Field: "danceability", Op: ">=", Value: 0.55},
-			{Field: "energy", Op: ">=", Value: 0.12},
-			{Field: "bpm", Op: ">=", Value: 120},
-			{Field: "arousal", Op: ">=", Value: 0.6},
-		},
-		SortField: "energy",
-	},
-	{
-		Key:   "sleep",
-		Label: "Sleep Mix",
-		Conditions: []Condition{
-			{Field: "mood_relaxed", Op: ">=", Value: 0.5},
-			{Field: "energy", Op: "<", Value: 0.08},
-			{Field: "bpm", Op: "<", Value: 100},
-			{Field: "arousal", Op: "<", Value: 0.3},
-		},
-		SortField: "mood_relaxed",
-	},
-	{
-		Key:   "road_trip",
-		Label: "Road Trip Mix",
-		Conditions: []Condition{
-			{Field: "mood_happy", Op: ">=", Value: 0.4},
-			{Field: "danceability", Op: ">=", Value: 0.45},
-			{Field: "energy", Op: ">=", Value: 0.1},
-		},
-		SortField: "mood_happy",
-	},
-	{
-		Key:   "cooking",
-		Label: "Cooking Mix",
-		Conditions: []Condition{
-			{Field: "mood_happy", Op: ">=", Value: 0.35},
-			{Field: "mood_relaxed", Op: ">=", Value: 0.3},
-			{Field: "danceability", Op: ">=", Value: 0.3},
-			{Field: "mood_aggressive", Op: "<", Value: 0.2},
+			{Field: "mood_relaxed", Op: "<", Value: 0.60},
+			{Field: "mood_sad", Op: "<", Value: 0.50},
 		},
 		SortField: "danceability",
 	},
 	{
-		Key:   "dining",
-		Label: "Dining Mix",
+		// Very quiet and calm — stricter aggressive/party exclusion than Study; sort by most relaxed
+		Key:   "sleep",
+		Label: "Sleep Mix",
 		Conditions: []Condition{
-			{Field: "mood_relaxed", Op: ">=", Value: 0.4},
-			{Field: "mood_happy", Op: ">=", Value: 0.3},
-			{Field: "energy", Op: "<", Value: 0.15},
-			{Field: "mood_aggressive", Op: "<", Value: 0.15},
+			{Field: "mood_aggressive", Op: "<", Value: 0.30},
+			{Field: "mood_party", Op: "<", Value: 0.35},
 		},
 		SortField: "mood_relaxed",
 	},
 	{
+		// Upbeat driving — exclude aggressive and sad; sort by happiest
+		Key:   "road_trip",
+		Label: "Road Trip Mix",
+		Conditions: []Condition{
+			{Field: "mood_aggressive", Op: "<", Value: 0.40},
+			{Field: "mood_sad", Op: "<", Value: 0.50},
+		},
+		SortField: "mood_happy",
+	},
+	{
+		// Light and pleasant — exclude aggressive and sad; sort by happiest
+		Key:   "cooking",
+		Label: "Cooking Mix",
+		Conditions: []Condition{
+			{Field: "mood_aggressive", Op: "<", Value: 0.45},
+			{Field: "mood_sad", Op: "<", Value: 0.45},
+		},
+		SortField: "mood_happy",
+	},
+	{
+		// Relaxed table atmosphere — exclude aggressive; sort by most relaxed
+		Key:   "dining",
+		Label: "Dining Mix",
+		Conditions: []Condition{
+			{Field: "mood_aggressive", Op: "<", Value: 0.40},
+		},
+		SortField: "mood_relaxed",
+	},
+	{
+		// Unobtrusive ambient — exclude aggressive and high-energy party; sort by most relaxed
 		Key:   "background",
 		Label: "Background Mix",
 		Conditions: []Condition{
-			{Field: "mood_relaxed", Op: ">=", Value: 0.35},
-			{Field: "energy", Op: "<", Value: 0.12},
-			{Field: "mood_party", Op: "<", Value: 0.3},
-			{Field: "mood_aggressive", Op: "<", Value: 0.2},
+			{Field: "mood_aggressive", Op: "<", Value: 0.50},
+			{Field: "mood_party", Op: "<", Value: 0.55},
 		},
 		SortField: "mood_relaxed",
 	},
@@ -349,11 +343,22 @@ type analysisTask struct {
 }
 
 func runAnalysis() int32 {
-	pdk.Log(pdk.LogInfo, "Queuing tracks for mood analysis...")
+	// Queue as many batches as possible within the time budget.
+	// Progress (offset) is persisted in KV store so each run continues where
+	// the last one left off. Resets to 0 when the end of the library is reached.
+	const batchSize = 500
+	const deadline = 20 * time.Second
 
-	queued := 0
+	offsetData, _, _ := host.KVStoreGet("analysis:offset")
 	offset := 0
-	batchSize := 500
+	if len(offsetData) > 0 {
+		offset, _ = strconv.Atoi(string(offsetData))
+	}
+
+	pdk.Log(pdk.LogInfo, fmt.Sprintf("Queuing tracks for mood analysis (offset %d)...", offset))
+
+	start := time.Now()
+	totalQueued := 0
 
 	for {
 		uri := fmt.Sprintf("search3?query=&songCount=%d&songOffset=%d&albumCount=0&artistCount=0", batchSize, offset)
@@ -370,7 +375,6 @@ func runAnalysis() int32 {
 						ID     string `json:"id"`
 						Title  string `json:"title"`
 						Artist string `json:"artist"`
-						Album  string `json:"album"`
 						Path   string `json:"path"`
 					} `json:"song"`
 				} `json:"searchResult3"`
@@ -384,10 +388,18 @@ func runAnalysis() int32 {
 
 		songs := result.SubsonicResponse.SearchResult3.Song
 		if len(songs) == 0 {
-			break
+			// End of library — reset for next full pass
+			offset = 0
+			host.KVStoreSet("analysis:offset", []byte("0"))
+			pdk.Log(pdk.LogInfo, fmt.Sprintf("Reached end of library, queued %d tracks total — offset reset to 0", totalQueued))
+			return 0
 		}
 
 		for _, song := range songs {
+			// Skip tracks already analyzed — avoids unnecessary work when library is fully analyzed
+			if existing, ok, _ := host.KVStoreGet("mood:" + song.ID); ok && len(existing) > 0 {
+				continue
+			}
 			taskData, _ := json.Marshal(analysisTask{
 				ID:     song.ID,
 				Title:  song.Title,
@@ -397,16 +409,28 @@ func runAnalysis() int32 {
 				pdk.Log(pdk.LogWarn, "Failed to queue "+song.Title+": "+err.Error())
 				continue
 			}
-			queued++
+			totalQueued++
 		}
 
-		offset += batchSize
+		offset += len(songs)
 		if len(songs) < batchSize {
+			// Partial page — end of library
+			offset = 0
+			host.KVStoreSet("analysis:offset", []byte("0"))
+			pdk.Log(pdk.LogInfo, fmt.Sprintf("Reached end of library, queued %d tracks total — offset reset to 0", totalQueued))
+			return 0
+		}
+
+		host.KVStoreSet("analysis:offset", []byte(strconv.Itoa(offset)))
+
+		// Stop fetching if we are approaching the deadline
+		if time.Since(start) >= deadline {
 			break
 		}
 	}
 
-	pdk.Log(pdk.LogInfo, fmt.Sprintf("Queued %d tracks for analysis", queued))
+	host.KVStoreSet("analysis:offset", []byte(strconv.Itoa(offset)))
+	pdk.Log(pdk.LogInfo, fmt.Sprintf("Queued %d tracks (next offset: %d)", totalQueued, offset))
 	return 0
 }
 
@@ -569,6 +593,7 @@ func selectTracks(sorted []trackWithScores, limit, maxPerArtist int) []string {
 func refreshPlaylists() int32 {
 	pdk.Log(pdk.LogInfo, "Refreshing mood playlists...")
 	trackCount := configInt("playlist_track_count", 30)
+	existingIDs := getExistingPlaylistIDs()
 
 	indexData, ok, err := host.KVStoreGet("mood:index")
 	if err != nil || !ok || len(indexData) == 0 {
@@ -643,7 +668,7 @@ func refreshPlaylists() int32 {
 			pdk.Log(pdk.LogDebug, "No tracks for "+mood.Label)
 			continue
 		}
-		createPlaylist(mood.Label, songIDs)
+		upsertPlaylist(mood.Label, songIDs, existingIDs)
 	}
 
 	// Composite moods (multiple conditions)
@@ -664,7 +689,7 @@ func refreshPlaylists() int32 {
 			pdk.Log(pdk.LogDebug, "No tracks for "+mood.Label)
 			continue
 		}
-		createPlaylist(mood.Label, songIDs)
+		upsertPlaylist(mood.Label, songIDs, existingIDs)
 	}
 
 	pdk.Log(pdk.LogInfo, "Mood playlists refreshed")
@@ -688,14 +713,55 @@ func matchesAllConditions(scores MoodScores, conditions []Condition) bool {
 	return true
 }
 
-func createPlaylist(name string, songIDs []string) {
-	params := "name=" + url.QueryEscape(name)
+// getExistingPlaylistIDs returns a map of playlist name → id for all playlists
+// visible to the configured user. Used by refreshPlaylists to update rather than
+// duplicate when a mood playlist already exists.
+func getExistingPlaylistIDs() map[string]string {
+	result := map[string]string{}
+	body, err := subsonicCall("getPlaylists.view?")
+	if err != nil {
+		pdk.Log(pdk.LogWarn, "getPlaylists failed: "+err.Error())
+		return result
+	}
+	// Parse just what we need: {"subsonic-response":{"playlists":{"playlist":[{"id":"...","name":"..."}]}}}
+	var resp struct {
+		SubsonicResponse struct {
+			Playlists struct {
+				Playlist []struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"playlist"`
+			} `json:"playlists"`
+		} `json:"subsonic-response"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		pdk.Log(pdk.LogWarn, "Failed to parse getPlaylists response: "+err.Error())
+		return result
+	}
+	for _, pl := range resp.SubsonicResponse.Playlists.Playlist {
+		result[pl.Name] = pl.ID
+	}
+	return result
+}
+
+// upsertPlaylist creates a new playlist or replaces the tracks in an existing one.
+// existingIDs maps playlist name → id; when a match is found the playlist is
+// updated in-place so Navidrome never accumulates duplicates.
+func upsertPlaylist(name string, songIDs []string, existingIDs map[string]string) {
+	var params string
+	if id, ok := existingIDs[name]; ok {
+		// Update existing playlist — replace all tracks
+		params = "playlistId=" + url.QueryEscape(id) + "&name=" + url.QueryEscape(name)
+	} else {
+		// Create brand-new playlist
+		params = "name=" + url.QueryEscape(name)
+	}
 	for _, id := range songIDs {
 		params += "&songId=" + url.QueryEscape(id)
 	}
 	_, err := subsonicCall("createPlaylist?" + params)
 	if err != nil {
-		pdk.Log(pdk.LogError, "Failed to create playlist '"+name+"': "+err.Error())
+		pdk.Log(pdk.LogError, "Failed to upsert playlist '"+name+"': "+err.Error())
 		return
 	}
 	pdk.Log(pdk.LogInfo, fmt.Sprintf("Created playlist '%s' with %d tracks", name, len(songIDs)))

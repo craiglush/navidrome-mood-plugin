@@ -92,7 +92,7 @@
           "type": "number",
           "title": "Chill Threshold",
           "description": "Minimum score (0-1) for chill/relaxed mood classification",
-          "default": 0.55
+          "default": 0.40
         },
         "energetic_threshold": {
           "type": "number",
