@@ -5,16 +5,40 @@
   "author": "Craig Lusher",
   "version": "0.3.0",
   "description": "Audio analysis-powered mood playlists and Instant Mix. Creates 13 mood playlists (Happy, Chill, Energetic, Melancholy, Party, Aggressive, Study, Workout, Sleep, Road Trip, Cooking, Dining, Background) using an external analyzer service.",
-  "website": "https://github.com/craiglush/navidrome-mood-plugin",
+  "website": "https://github.com/RFLundgren/navidrome-mood-plugin/blob/master/HELP.md",
   "config": {
     "schema": {
       "type": "object",
       "properties": {
+        "navidrome_url": {
+          "type": "string",
+          "title": "Navidrome URL",
+          "description": "Internal URL of your Navidrome server (e.g., http://navidrome:4533)",
+          "default": "http://navidrome:4533"
+        },
+        "navidrome_user": {
+          "type": "string",
+          "title": "Navidrome Username",
+          "description": "Username for Navidrome API access (required for scheduled tasks)",
+          "writeOnly": true
+        },
+        "navidrome_password": {
+          "type": "string",
+          "title": "Navidrome Password",
+          "description": "Password for Navidrome API access (required for scheduled tasks)",
+          "writeOnly": true
+        },
         "analyzer_url": {
           "type": "string",
           "title": "Analyzer Service URL",
-          "description": "URL of the mood analyzer HTTP service (e.g., http://music-manager:5000)",
-          "default": "http://music-manager:5000"
+          "description": "URL of the mood analyzer HTTP service (e.g., http://mood-analyzer:8000)",
+          "default": "http://mood-analyzer:8000"
+        },
+        "music_path": {
+          "type": "string",
+          "title": "Music Mount Path",
+          "description": "Absolute path where music is mounted in the analyzer container (e.g., /music)",
+          "default": "/music"
         },
         "auto_analyze": {
           "type": "boolean",
@@ -27,6 +51,26 @@
           "title": "Analysis Schedule (cron)",
           "description": "Cron expression for when to scan for and analyze new tracks",
           "default": "0 2 * * *"
+        },
+        "reanalyze_uncertain": {
+          "type": "boolean",
+          "title": "Re-analyze Uncertain Tracks",
+          "description": "Automatically re-analyze tracks where no mood score was confident (improves accuracy over time)",
+          "default": true
+        },
+        "reanalyze_percent": {
+          "type": "integer",
+          "title": "Random Re-analysis %",
+          "description": "Percentage of already-analyzed tracks to randomly re-analyze each scheduled run (0 = disabled)",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 20
+        },
+        "reanalyze_schedule": {
+          "type": "string",
+          "title": "Re-analysis Schedule (cron)",
+          "description": "When to run the dedicated re-analysis pass (uncertain tracks + random %).",
+          "default": "0 4 1 * *"
         },
         "playlist_refresh_schedule": {
           "type": "string",
@@ -50,6 +94,22 @@
           "minimum": 5,
           "maximum": 100
         },
+        "max_tracks_per_artist": {
+          "type": "integer",
+          "title": "Max Tracks per Artist",
+          "description": "Maximum number of tracks from the same artist in any single playlist (0 = no limit)",
+          "default": 3,
+          "minimum": 0,
+          "maximum": 50
+        },
+        "playlist_variation_pool": {
+          "type": "integer",
+          "title": "Variation Pool",
+          "description": "Playlists draw randomly from the top N × pool qualifying tracks. Higher = more variety each refresh. 1 = always the same tracks.",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 10
+        },
         "happy_threshold": {
           "type": "number",
           "title": "Happy Threshold",
@@ -60,7 +120,7 @@
           "type": "number",
           "title": "Chill Threshold",
           "description": "Minimum score (0-1) for chill/relaxed mood classification",
-          "default": 0.55
+          "default": 0.40
         },
         "energetic_threshold": {
           "type": "number",
@@ -84,7 +144,7 @@
           "type": "number",
           "title": "Aggressive Threshold",
           "description": "Minimum score (0-1) for aggressive mood classification",
-          "default": 0.45
+          "default": 0.55
         }
       }
     },
@@ -92,12 +152,54 @@
       "type": "VerticalLayout",
       "elements": [
         {
+          "type": "Label",
+          "text": "Need help? Full setup guide: https://github.com/RFLundgren/navidrome-mood-plugin/blob/master/HELP.md"
+        },
+        {
+          "type": "Group",
+          "label": "Navidrome Connection",
+          "elements": [
+            {
+              "type": "HorizontalLayout",
+              "elements": [
+                {
+                  "type": "Control",
+                  "scope": "#/properties/navidrome_url"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/navidrome_user",
+                  "options": {
+                    "format": "password"
+                  }
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/navidrome_password",
+                  "options": {
+                    "format": "password"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
           "type": "Group",
           "label": "Analyzer Service",
           "elements": [
             {
-              "type": "Control",
-              "scope": "#/properties/analyzer_url"
+              "type": "HorizontalLayout",
+              "elements": [
+                {
+                  "type": "Control",
+                  "scope": "#/properties/analyzer_url"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/music_path"
+                }
+              ]
             },
             {
               "type": "HorizontalLayout",
@@ -109,6 +211,23 @@
                 {
                   "type": "Control",
                   "scope": "#/properties/analyze_schedule"
+                }
+              ]
+            },
+            {
+              "type": "HorizontalLayout",
+              "elements": [
+                {
+                  "type": "Control",
+                  "scope": "#/properties/reanalyze_uncertain"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/reanalyze_percent"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/reanalyze_schedule"
                 }
               ]
             }
@@ -125,6 +244,19 @@
                   "type": "Control",
                   "scope": "#/properties/playlist_track_count"
                 },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/max_tracks_per_artist"
+                },
+                {
+                  "type": "Control",
+                  "scope": "#/properties/playlist_variation_pool"
+                }
+              ]
+            },
+            {
+              "type": "HorizontalLayout",
+              "elements": [
                 {
                   "type": "Control",
                   "scope": "#/properties/similar_songs_count"
@@ -195,8 +327,8 @@
       "reason": "Schedule periodic analysis and playlist refresh tasks"
     },
     "taskqueue": {
-      "reason": "Process audio analysis in background batches",
-      "maxConcurrency": 2
+      "reason": "Process audio analysis in background without blocking the scheduler",
+      "maxConcurrency": 4
     },
     "kvstore": {
       "reason": "Store mood analysis scores for each track",
