@@ -47,7 +47,7 @@ Navidrome (+ Plugin)                    Analyzer Service (Docker)
 
 **The analyzer service streams audio directly from Navidrome over HTTP — it does not need access to your music files.**
 
-Each track's first 90 seconds is analyzed for: BPM, energy, danceability, and five mood scores (happy, sad, relaxed, aggressive, party). Results are stored inside Navidrome and used to build playlists and power Instant Mix.
+Each track's first 120 seconds is analyzed for: BPM, energy, danceability, and five mood scores (happy, sad, relaxed, aggressive, party). Results are stored inside Navidrome and used to build playlists and power Instant Mix.
 
 ---
 
@@ -254,7 +254,7 @@ Alternatively, set it to `* * * * *` to fire every minute, wait one minute, then
 
 1. The plugin fetches all tracks from your library via the Subsonic API (in batches of 500)
 2. Each track is added to a background task queue
-3. Workers (4 concurrent by default) process the queue — each worker streams the first 90 seconds of the track's audio to the analyzer service
+3. Workers (4 concurrent by default) process the queue — each worker streams the first 120 seconds of the track's audio to the analyzer service
 4. The analyzer extracts mood scores using TensorFlow models and returns them
 5. Scores are saved in the plugin's KV store, keyed by track ID
 
@@ -269,6 +269,8 @@ Each track takes roughly 10–20 seconds to analyze on a typical server CPU. Wit
 | 10,000 tracks | 8–16 hours |
 
 Analysis is **incremental** — already-analyzed tracks are skipped on every subsequent run. Once your library is fully analyzed, the nightly run only processes new additions and completes in minutes.
+
+After each full library pass, the plugin also automatically re-queues any tracks that received low-confidence scores (where no mood exceeded 0.45). These get a second analysis attempt, which often produces better results. You can also configure a **Random Re-analysis %** to gradually refresh a portion of your library each run — useful for improving scores over time without re-analyzing everything at once.
 
 ### Check progress
 
@@ -424,6 +426,8 @@ Each refresh updates existing playlists in-place rather than creating new ones. 
 | `playlist_track_count` | `30` | 10 | 200 | Maximum tracks per playlist |
 | `max_tracks_per_artist` | `3` | 0 | 50 | Maximum tracks per artist per playlist (0 = no limit) |
 | `playlist_variation_pool` | `3` | 1 | 10 | Shuffle top N × pool tracks before picking; higher = more weekly variety (1 = always same tracks) |
+| `reanalyze_uncertain` | `true` | — | — | Automatically re-analyze tracks with low-confidence scores after each full library pass |
+| `reanalyze_percent` | `0` | 0 | 20 | Percentage of library to randomly re-analyze each run (0 = disabled) |
 | `similar_songs_count` | `20` | 5 | 100 | Tracks returned for Instant Mix |
 | `happy_threshold` | `0.55` | 0 | 1 | Minimum score for Happy Mix |
 | `chill_threshold` | `0.40` | 0 | 1 | Minimum score for Chill Mix |
