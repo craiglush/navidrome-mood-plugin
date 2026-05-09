@@ -219,7 +219,7 @@ Note: Composite mood conditions (Study, Workout, etc.) are not configurable via 
 make docker-build
 ```
 
-### With Go 1.24+
+### With Go 1.26+
 
 ```bash
 GOOS=wasip1 GOARCH=wasm go build -buildmode=c-shared -o plugin.wasm .
