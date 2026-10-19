@@ -448,6 +448,12 @@ func refreshPlaylists() int32 {
 		pdk.Log(pdk.LogError, "Cannot resolve Subsonic user: "+err.Error())
 		return 1
 	}
+	existing, err := playlistIDs(user)
+	if err != nil {
+		pdk.Log(pdk.LogError, "Cannot list playlists: "+err.Error())
+		return 1
+	}
+	failures := 0
 
 	indexData, ok, err := host.KVStoreGet("mood:index")
 	if err != nil || !ok || len(indexData) == 0 {
@@ -518,7 +524,9 @@ func refreshPlaylists() int32 {
 		for i := 0; i < limit; i++ {
 			songIDs[i] = matching[i].id
 		}
-		createPlaylist(user, mood.Label, songIDs)
+		if err := createPlaylist(user, mood.Label, songIDs, existing); err != nil {
+			failures++
+		}
 	}
 
 	// Composite moods (multiple conditions)
@@ -547,9 +555,15 @@ func refreshPlaylists() int32 {
 		for i := 0; i < limit; i++ {
 			songIDs[i] = matching[i].id
 		}
-		createPlaylist(user, mood.Label, songIDs)
+		if err := createPlaylist(user, mood.Label, songIDs, existing); err != nil {
+			failures++
+		}
 	}
 
+	if failures > 0 {
+		pdk.Log(pdk.LogError, fmt.Sprintf("Mood playlists refreshed with %d failures", failures))
+		return 1
+	}
 	pdk.Log(pdk.LogInfo, "Mood playlists refreshed")
 	return 0
 }
@@ -571,8 +585,17 @@ func matchesAllConditions(scores MoodScores, conditions []Condition) bool {
 	return true
 }
 
-func createPlaylist(user, name string, songIDs []string) error {
-	params := "name=" + url.QueryEscape(name) + "&u=" + url.QueryEscape(user)
+func createPlaylist(user, name string, songIDs []string, existing map[string]string) error {
+	var params string
+	action := "Created"
+	if id := existing[name]; id != "" {
+		// createPlaylist with a playlistId replaces all tracks.
+		params = "playlistId=" + url.QueryEscape(id)
+		action = "Updated"
+	} else {
+		params = "name=" + url.QueryEscape(name)
+	}
+	params += "&u=" + url.QueryEscape(user)
 	for _, id := range songIDs {
 		params += "&songId=" + url.QueryEscape(id)
 	}
@@ -581,8 +604,35 @@ func createPlaylist(user, name string, songIDs []string) error {
 		pdk.Log(pdk.LogError, "Failed to create playlist '"+name+"': "+err.Error())
 		return err
 	}
-	pdk.Log(pdk.LogInfo, fmt.Sprintf("Created playlist '%s' with %d tracks", name, len(songIDs)))
+	pdk.Log(pdk.LogInfo, fmt.Sprintf("%s playlist '%s' with %d tracks", action, name, len(songIDs)))
 	return nil
+}
+
+// playlistIDs maps playlist name to id for the acting user, so a refresh
+// replaces tracks instead of creating a duplicate playlist every week.
+func playlistIDs(user string) (map[string]string, error) {
+	ids := map[string]string{}
+	body, err := host.SubsonicAPICall("getPlaylists?u=" + url.QueryEscape(user))
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		SubsonicResponse struct {
+			Playlists struct {
+				Playlist []struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"playlist"`
+			} `json:"playlists"`
+		} `json:"subsonic-response"`
+	}
+	if err := json.Unmarshal([]byte(body), &resp); err != nil {
+		return nil, err
+	}
+	for _, p := range resp.SubsonicResponse.Playlists.Playlist {
+		ids[p.Name] = p.ID
+	}
+	return ids, nil
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
