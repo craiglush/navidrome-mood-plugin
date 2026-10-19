@@ -304,16 +304,39 @@ func (p *moodPlugin) GetSimilarSongsByTrack(req metadata.SimilarSongsByTrackRequ
 
 // ── Analysis Logic ───────────────────────────────────────────────
 
+// subsonicUser returns a user the plugin may act as. Scheduled tasks have no
+// request user, so every Subsonic call must name one explicitly via 'u'.
+func subsonicUser() (string, error) {
+	admins, err := host.UsersGetAdmins()
+	if err == nil && len(admins) > 0 {
+		return admins[0].UserName, nil
+	}
+	users, err := host.UsersGetUsers()
+	if err != nil {
+		return "", err
+	}
+	if len(users) == 0 {
+		return "", fmt.Errorf("no Navidrome user authorised for this plugin")
+	}
+	return users[0].UserName, nil
+}
+
 func runAnalysis() int32 {
 	analyzerURL := configString("analyzer_url", "http://music-manager:5000")
 	pdk.Log(pdk.LogInfo, "Running mood analysis via "+analyzerURL)
+
+	user, err := subsonicUser()
+	if err != nil {
+		pdk.Log(pdk.LogError, "Cannot resolve Subsonic user: "+err.Error())
+		return 1
+	}
 
 	analyzed := 0
 	offset := 0
 	batchSize := 100
 
 	for {
-		uri := fmt.Sprintf("search3?query=&songCount=%d&songOffset=%d&albumCount=0&artistCount=0", batchSize, offset)
+		uri := fmt.Sprintf("search3?u=%s&query=&songCount=%d&songOffset=%d&albumCount=0&artistCount=0", url.QueryEscape(user), batchSize, offset)
 		respStr, err := host.SubsonicAPICall(uri)
 		if err != nil {
 			pdk.Log(pdk.LogError, "Subsonic API search failed: "+err.Error())
@@ -420,6 +443,12 @@ func refreshPlaylists() int32 {
 	pdk.Log(pdk.LogInfo, "Refreshing mood playlists...")
 	trackCount := configInt("playlist_track_count", 30)
 
+	user, err := subsonicUser()
+	if err != nil {
+		pdk.Log(pdk.LogError, "Cannot resolve Subsonic user: "+err.Error())
+		return 1
+	}
+
 	indexData, ok, err := host.KVStoreGet("mood:index")
 	if err != nil || !ok || len(indexData) == 0 {
 		pdk.Log(pdk.LogWarn, "No analyzed tracks found — run analysis first")
@@ -489,7 +518,7 @@ func refreshPlaylists() int32 {
 		for i := 0; i < limit; i++ {
 			songIDs[i] = matching[i].id
 		}
-		createPlaylist(mood.Label, songIDs)
+		createPlaylist(user, mood.Label, songIDs)
 	}
 
 	// Composite moods (multiple conditions)
@@ -518,7 +547,7 @@ func refreshPlaylists() int32 {
 		for i := 0; i < limit; i++ {
 			songIDs[i] = matching[i].id
 		}
-		createPlaylist(mood.Label, songIDs)
+		createPlaylist(user, mood.Label, songIDs)
 	}
 
 	pdk.Log(pdk.LogInfo, "Mood playlists refreshed")
@@ -542,17 +571,18 @@ func matchesAllConditions(scores MoodScores, conditions []Condition) bool {
 	return true
 }
 
-func createPlaylist(name string, songIDs []string) {
-	params := "name=" + url.QueryEscape(name)
+func createPlaylist(user, name string, songIDs []string) error {
+	params := "name=" + url.QueryEscape(name) + "&u=" + url.QueryEscape(user)
 	for _, id := range songIDs {
 		params += "&songId=" + url.QueryEscape(id)
 	}
 	_, err := host.SubsonicAPICall("createPlaylist?" + params)
 	if err != nil {
 		pdk.Log(pdk.LogError, "Failed to create playlist '"+name+"': "+err.Error())
-		return
+		return err
 	}
 	pdk.Log(pdk.LogInfo, fmt.Sprintf("Created playlist '%s' with %d tracks", name, len(songIDs)))
+	return nil
 }
 
 // ── Helpers ──────────────────────────────────────────────────────
