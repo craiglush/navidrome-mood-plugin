@@ -200,9 +200,16 @@ func onInit() int32 {
 
 // ── Scheduled Task Handler ───────────────────────────────────────
 
-//go:wasmexport nd_on_schedule
+//go:wasmexport nd_scheduler_callback
 func onSchedule() int32 {
+	// Navidrome sends a SchedulerCallbackRequest, not the raw payload.
+	var req struct {
+		Payload string `json:"payload"`
+	}
 	payload := string(pdk.Input())
+	if err := json.Unmarshal([]byte(payload), &req); err == nil && req.Payload != "" {
+		payload = req.Payload
+	}
 	pdk.Log(pdk.LogInfo, "Scheduled task triggered: "+payload)
 
 	switch payload {
