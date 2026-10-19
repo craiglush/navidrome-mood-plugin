@@ -194,10 +194,6 @@
     "scheduler": {
       "reason": "Schedule periodic analysis and playlist refresh tasks"
     },
-    "taskqueue": {
-      "reason": "Process audio analysis in background batches",
-      "maxConcurrency": 2
-    },
     "kvstore": {
       "reason": "Store mood analysis scores for each track",
       "maxSize": "50MB"
